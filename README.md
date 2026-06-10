@@ -145,3 +145,4 @@ Set these env vars to point the examples at a repository:
 - **Replace migrations are explicit**: additive schema changes auto-apply, while removals/type changes require destructive intent and an explicit migration plan. Trade-off is extra operational steps, but safer data lifecycle.
 - **In-process scheduler worker**: simple runtime model (one worker process) with persisted sync state and manual run queue in Postgres. Trade-off is no distributed locking/lease model yet for multi-worker horizontal scaling.
 # ThirdLayer
+# ThirdLayer
