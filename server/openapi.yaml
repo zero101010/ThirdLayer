@@ -1,0 +1,389 @@
+openapi: 3.0.3
+info:
+  title: ThirdLayer Platform API
+  version: 0.1.0
+  description: API for querying and mutating tenant tables (ThirdLayer Takehome)
+servers:
+  - url: http://localhost:3000
+components:
+  parameters:
+    TenantIdHeader:
+      name: x-tenant-id
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Tenant identifier
+  securitySchemes:
+    TenantApiKey:
+      type: apiKey
+      in: header
+      name: x-tenant-key
+    AdminBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: API key
+  schemas:
+    Row:
+      type: object
+      properties:
+        key:
+          type: string
+        values:
+          type: object
+          additionalProperties: true
+    QueryRequest:
+      type: object
+      properties:
+        filter:
+          type: object
+          description: Compound filter tree (`and` / `or`) or property condition.
+          example:
+            and:
+              - property: state
+                select:
+                  equals: open
+              - property: isUrgent
+                checkbox:
+                  equals: true
+        sorts:
+          type: array
+          items:
+            type: object
+            properties:
+              property:
+                type: string
+              direction:
+                type: string
+                enum: [ascending, descending]
+        page_size:
+          type: integer
+        start_cursor:
+          type: string
+          description: Opaque cursor from previous response.
+    QueryResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Row'
+        has_more:
+          type: boolean
+        next_cursor:
+          type: string
+    UpsertRequest:
+      type: object
+      properties:
+        key:
+          type: string
+        values:
+          type: object
+          additionalProperties: true
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+    TenantCreateRequest:
+      type: object
+      required: [tenantId]
+      properties:
+        tenantId:
+          type: string
+    DeployProjectRequest:
+      type: object
+      required: [name, modulePath]
+      properties:
+        name:
+          type: string
+        modulePath:
+          type: string
+    DeploySchemaRequest:
+      type: object
+      required: [tables]
+      properties:
+        tables:
+          type: array
+          items:
+            type: object
+            required: [name, primaryKey, schema]
+            properties:
+              name:
+                type: string
+              primaryKey:
+                type: string
+              schema:
+                type: object
+                additionalProperties: true
+    SyncRunRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+    DatasourceConfigRequest:
+      type: object
+      required: [config]
+      properties:
+        config:
+          type: object
+          additionalProperties: true
+          example:
+            token: ghp_xxx
+            owner: octocat
+            repo: Hello-World
+
+paths:
+  /docs:
+    get:
+      summary: Swagger UI page
+      tags: [meta]
+      responses:
+        '200':
+          description: HTML Swagger UI
+  /docs/openapi.yaml:
+    get:
+      summary: OpenAPI document
+      tags: [meta]
+      responses:
+        '200':
+          description: OpenAPI YAML
+  /v1/tables/{table}/query:
+    post:
+      summary: Execute a read-only row query
+      description: Read-only query endpoint that accepts complex filter/sort/cursor payloads in the request body. Uses POST for query expressiveness, not for resource creation.
+      tags: [tables]
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+        - name: table
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+      responses:
+        '200':
+          description: Query results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+      security:
+        - TenantApiKey: []
+  /v1/tables/{table}/rows/{key}:
+    get:
+      summary: Fetch a single row by primary key
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+        - name: table
+          in: path
+          required: true
+          schema: { type: string }
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Row
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Row'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+        - TenantApiKey: []
+    patch:
+      summary: Update part of a row by key
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+        - name: table
+          in: path
+          required: true
+          schema: { type: string }
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values:
+                  type: object
+                  additionalProperties: true
+              required: [values]
+      responses:
+        '200': { description: 'updated' }
+      security:
+        - TenantApiKey: []
+    put:
+      summary: Replace full row by key
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+        - name: table
+          in: path
+          required: true
+          schema: { type: string }
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values:
+                  type: object
+                  additionalProperties: true
+              required: [values]
+      responses:
+        '200': { description: 'replaced' }
+      security:
+        - TenantApiKey: []
+    delete:
+      summary: Delete a row by key
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+        - name: table
+          in: path
+          required: true
+          schema: { type: string }
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: 'deleted' }
+      security:
+        - TenantApiKey: []
+  /v1/tables/{table}/rows:
+    post:
+      summary: Create one row through the platform API
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+        - name: table
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertRequest'
+      responses:
+        '201':
+          description: created
+      security:
+        - TenantApiKey: []
+  /v1/tenants:
+    post:
+      summary: Create or rotate tenant API key (admin)
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantCreateRequest'
+      responses:
+        '200':
+          description: Tenant key generated
+      security:
+        - AdminBearer: []
+  /v1/deploy:
+    post:
+      summary: Deploy table schema definition for a tenant (admin)
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeploySchemaRequest'
+      responses:
+        '200':
+          description: Table schema deployed
+      security:
+        - AdminBearer: []
+  /v1/deploy/project:
+    post:
+      summary: Deploy project module for a tenant (admin)
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeployProjectRequest'
+      responses:
+        '200':
+          description: Project deployed
+      security:
+        - AdminBearer: []
+  /v1/syncs/run:
+    post:
+      summary: Queue manual sync run for tenant (admin)
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncRunRequest'
+      responses:
+        '202':
+          description: Sync run queued
+      security:
+        - AdminBearer: []
+  /v1/datasources/{provider}:
+    post:
+      summary: Set tenant datasource credentials/config (admin)
+      description: Use `provider=github` for GitHub-backed syncs (route becomes `/v1/datasources/github`).
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          example: github
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatasourceConfigRequest'
+      responses:
+        '200':
+          description: Datasource config saved
+      security:
+        - AdminBearer: []
+
+security:
+  - TenantApiKey: []
