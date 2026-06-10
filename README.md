@@ -41,6 +41,8 @@ curl -s -X POST http://localhost:3000/v1/tenants \
   -d '{"tenantId":"acme"}'
 ```
 
+If `tenantId` already exists, this endpoint keeps the existing key and does not rotate/reissue it.
+
 2. (Recommended) set tenant datasource config for GitHub:
 
 ```bash
@@ -98,7 +100,9 @@ npm run run:project -- \
 Notes:
 - Requires server and worker running.
 - Uses `ADMIN_API_KEY` from `.env` by default (or pass `--admin-key`).
+- Tenant creation is idempotent: existing tenant IDs keep their current key.
 - Use `--sync-name <name>` to choose which sync to enqueue.
+- If tenant already exists, pass `--tenant-key` (or `TENANT_KEY`) to print query examples.
 - Use `--skip-sync` if you only want tenant/datasource/deploy.
 - These admin API calls are available from `packages/authoring-sdk/src` via `ThirdLayerAdminApi` (`createTenant`, `setDatasourceConfig`, `deployProject`, `enqueueSync`).
 
@@ -120,6 +124,7 @@ Run `examples/github-prs/project.ts` directly as a single-file flow (tenant -> d
 npx ts-node examples/github-prs/project.ts \
   --tenant acme \
   --admin-key admin-secret \
+  --tenant-key <existing-tenant-key> \
   --github-token <github-token> \
   --owner octocat \
   --repo Hello-World

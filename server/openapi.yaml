@@ -91,6 +91,19 @@ components:
       properties:
         tenantId:
           type: string
+    TenantCreateResponse:
+      type: object
+      required: [tenantId, created]
+      properties:
+        tenantId:
+          type: string
+        created:
+          type: boolean
+          description: True if tenant was newly created; false if it already existed.
+        apiKey:
+          type: string
+          nullable: true
+          description: Returned only when tenant is newly created. Existing tenant keys are not rotated or re-exposed.
     DeployProjectRequest:
       type: object
       required: [name, modulePath]
@@ -296,7 +309,7 @@ paths:
         - TenantApiKey: []
   /v1/tenants:
     post:
-      summary: Create or rotate tenant API key (admin)
+      summary: Create tenant API key if tenant does not exist (admin)
       tags: [admin]
       requestBody:
         required: true
@@ -306,7 +319,11 @@ paths:
               $ref: '#/components/schemas/TenantCreateRequest'
       responses:
         '200':
-          description: Tenant key generated
+          description: Tenant created (with key) or already existed (no key reissued)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantCreateResponse'
       security:
         - AdminBearer: []
   /v1/deploy:

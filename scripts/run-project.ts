@@ -50,6 +50,7 @@ Options:
   --github-token   Datasource token
   --owner          Datasource owner
   --repo           Datasource repo
+  --tenant-key     Existing tenant key (or TENANT_KEY env) for query examples
   --sync-name      Sync name to enqueue (default: first deployed sync)
   --skip-sync      Do not enqueue sync run
   --help           Show this help`;
@@ -83,6 +84,7 @@ async function main() {
     getArg(args, 'project-name') ?? (path.basename(modulePath).replace(/\.[^.]+$/, '') || 'project');
   const syncNameArg = getArg(args, 'sync-name');
   const skipSync = !!args['skip-sync'];
+  const existingTenantKey = getArg(args, 'tenant-key') ?? process.env.TENANT_KEY;
 
   const datasourceConfig = {
     token: getArg(args, 'github-token') ?? process.env.GITHUB_TOKEN,
@@ -95,7 +97,12 @@ async function main() {
 
   console.log(`1/4 Creating tenant "${tenant}"...`);
   const tenantResult = await adminApi.createTenant(tenant);
-  console.log(`Tenant ready: ${tenantResult.tenantId}`);
+  const effectiveTenantKey = tenantResult.apiKey ?? existingTenantKey ?? null;
+  if (tenantResult.created) {
+    console.log(`Tenant created: ${tenantResult.tenantId}`);
+  } else {
+    console.log(`Tenant already exists: ${tenantResult.tenantId} (kept existing key)`);
+  }
 
   if (Object.keys(config).length > 0) {
     console.log(`2/4 Saving datasource config "${provider}" for tenant "${tenant}"...`);
@@ -123,12 +130,14 @@ async function main() {
 
   console.log('\nDone.');
   console.log(`Tenant ID: ${tenantResult.tenantId}`);
-  console.log(`Tenant Key: ${tenantResult.apiKey}`);
-  if (deployedTables[0]) {
+  if (effectiveTenantKey) console.log(`Tenant Key: ${effectiveTenantKey}`);
+  if (deployedTables[0] && effectiveTenantKey) {
     console.log('\nExample query:');
     console.log(
-      `curl -s -X POST ${baseUrl}/v1/tables/${deployedTables[0]}/query -H "x-tenant-id: ${tenantResult.tenantId}" -H "x-tenant-key: ${tenantResult.apiKey}" -H "Content-Type: application/json" -d '{"page_size":10}'`
+      `curl -s -X POST ${baseUrl}/v1/tables/${deployedTables[0]}/query -H "x-tenant-id: ${tenantResult.tenantId}" -H "x-tenant-key: ${effectiveTenantKey}" -H "Content-Type: application/json" -d '{"page_size":10}'`
     );
+  } else if (deployedTables[0]) {
+    console.log('\nTenant key not returned because tenant already existed. Pass --tenant-key (or TENANT_KEY) to print query example.');
   }
 }
 

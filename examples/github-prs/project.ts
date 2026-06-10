@@ -128,6 +128,7 @@ Options:
   --github-token   GitHub token (or GITHUB_TOKEN)
   --owner          GitHub owner (or GITHUB_PRS_OWNER/GITHUB_OWNER)
   --repo           GitHub repo (or GITHUB_PRS_REPO/GITHUB_REPO)
+  --tenant-key     Existing tenant key (or TENANT_KEY env) for query example
   --skip-sync      Skip sync enqueue
   --help           Show this help`);
 }
@@ -152,6 +153,7 @@ async function runDirect() {
   const syncName = getArg(args, 'sync-name') ?? 'github-prs';
   const provider = getArg(args, 'provider') ?? 'github';
   const skipSync = !!args['skip-sync'];
+  const existingTenantKey = getArg(args, 'tenant-key') ?? process.env.TENANT_KEY;
 
   const datasourceConfig = {
     token: getArg(args, 'github-token') ?? process.env.GITHUB_TOKEN,
@@ -164,6 +166,12 @@ async function runDirect() {
 
   console.log(`1/4 Creating tenant "${tenant}"...`);
   const tenantResult = await adminApi.createTenant(tenant);
+  const effectiveTenantKey = tenantResult.apiKey ?? existingTenantKey ?? null;
+  if (tenantResult.created) {
+    console.log(`Tenant created: ${tenantResult.tenantId}`);
+  } else {
+    console.log(`Tenant already exists: ${tenantResult.tenantId} (kept existing key)`);
+  }
 
   if (Object.keys(config).length > 0) {
     console.log(`2/4 Saving datasource config "${provider}"...`);
@@ -184,10 +192,14 @@ async function runDirect() {
 
   console.log('\nDone.');
   console.log(`Tenant ID: ${tenantResult.tenantId}`);
-  console.log(`Tenant Key: ${tenantResult.apiKey}`);
-  console.log(
-    `curl -s -X POST ${baseUrl}/v1/tables/pull_requests/query -H "x-tenant-id: ${tenantResult.tenantId}" -H "x-tenant-key: ${tenantResult.apiKey}" -H "Content-Type: application/json" -d '{"page_size":10}'`
-  );
+  if (effectiveTenantKey) {
+    console.log(`Tenant Key: ${effectiveTenantKey}`);
+    console.log(
+      `curl -s -X POST ${baseUrl}/v1/tables/pull_requests/query -H "x-tenant-id: ${tenantResult.tenantId}" -H "x-tenant-key: ${effectiveTenantKey}" -H "Content-Type: application/json" -d '{"page_size":10}'`
+    );
+  } else {
+    console.log('Tenant key not returned because tenant already existed. Pass --tenant-key (or TENANT_KEY) for query calls.');
+  }
 }
 
 if (typeof require !== 'undefined' && require.main === module) {

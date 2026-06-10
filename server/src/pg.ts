@@ -82,11 +82,20 @@ export async function initDb() {
   )`);
 }
 
-export async function createTenant(tenantId: string) {
+export async function createTenant(tenantId: string): Promise<{ tenantId: string; created: boolean; apiKey: string | null }> {
   const raw = crypto.randomBytes(24).toString('hex');
   const hash = crypto.createHash('sha256').update(raw).digest('hex');
-  await pool.query('INSERT INTO tenants(tenant_id, api_key_hash, created_at) VALUES($1, $2, now()) ON CONFLICT (tenant_id) DO UPDATE SET api_key_hash=EXCLUDED.api_key_hash', [tenantId, hash]);
-  return { tenantId, apiKey: raw };
+  const res = await pool.query(
+    `INSERT INTO tenants(tenant_id, api_key_hash, created_at)
+     VALUES($1, $2, now())
+     ON CONFLICT (tenant_id) DO NOTHING
+     RETURNING tenant_id`,
+    [tenantId, hash]
+  );
+  if (res.rowCount === 0) {
+    return { tenantId, created: false, apiKey: null };
+  }
+  return { tenantId, created: true, apiKey: raw };
 }
 
 export async function verifyTenantKey(tenantId: string, apiKey: string) {

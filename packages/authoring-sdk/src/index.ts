@@ -103,7 +103,7 @@ export type ThirdLayerAdminApiOptions = {
   fetchImpl?: FetchLike;
 };
 
-export type TenantCreateResponse = { tenantId: string; apiKey: string };
+export type TenantCreateResponse = { tenantId: string; created: boolean; apiKey: string | null };
 export type DatasourceConfig = Record<string, any>;
 export type DatasourceSaveResponse = { saved: boolean; provider: string; hash: string };
 export type DeployProjectResponse = {
