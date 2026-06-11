@@ -1,55 +1,65 @@
 import express from 'express';
-import path from 'path';
 import {
   migrateTableSchema,
   createTenant,
   upsertDeployedProject,
+  registerSync,
   enqueueSyncRunRequest,
   upsertDatasourceConfig,
 } from './pg';
 
 const router = express.Router();
 
-// Deploy a project description (tables array) to the platform
-router.post('/deploy', async (req, res) => {
-  const project = req.body;
-  const tenant = req.headers['x-tenant-id'] ? String(req.headers['x-tenant-id']) : 'default';
-  if (!project || !project.tables) return res.status(400).json({ error: 'project.tables required' });
-  const results: any = [];
-  for (const t of project.tables) {
-    const r = await migrateTableSchema(tenant, t.name, t.primaryKey, t.schema, { destructive: !!req.query.destructive });
-    results.push({ table: t.name, result: r });
-  }
-  res.json({ results });
-});
-
-// Deploy a code project by module path.
+// Deploy a project: receive source code + metadata from developer
+// Validate, create tables, register syncs, store source code
 router.post('/deploy/project', async (req, res) => {
   const tenant = req.headers['x-tenant-id'] ? String(req.headers['x-tenant-id']) : 'default';
-  const { name, modulePath } = req.body || {};
-  if (!name || !modulePath) return res.status(400).json({ error: 'name and modulePath required' });
+  const { name, sourceCode, tables, syncs } = req.body || {};
 
-  const resolved = path.isAbsolute(modulePath) ? modulePath : path.resolve(process.cwd(), modulePath);
-  // Reset authoring registry so each module is loaded in isolation.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const sdk = require('../../packages/authoring-sdk/src');
-  if (typeof sdk?.resetProjectRegistry === 'function') sdk.resetProjectRegistry();
-  // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-  delete require.cache[require.resolve(resolved)];
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const loaded = require(resolved);
-  const project = loaded?.project;
-  if (!project || !Array.isArray(project.tables) || !Array.isArray(project.syncs)) {
-    return res.status(400).json({ error: 'module must export { project } with tables and syncs arrays' });
-  }
+  if (!name) return res.status(400).json({ error: 'name required' });
+  if (!sourceCode) return res.status(400).json({ error: 'sourceCode required' });
+  if (!Array.isArray(tables)) return res.status(400).json({ error: 'tables array required' });
+  if (!Array.isArray(syncs)) return res.status(400).json({ error: 'syncs array required' });
 
-  const results: any[] = [];
-  for (const t of project.tables) {
-    const r = await migrateTableSchema(tenant, t.name, t.primaryKey, t.schema, { destructive: !!req.query.destructive });
-    results.push({ table: t.name, result: r });
+  try {
+    console.log(`API: Deploying project ${tenant}/${name}`);
+
+    // Create/migrate tables
+    const results: any[] = [];
+    for (const t of tables) {
+      if (!t.name || !t.primaryKey || !t.schema) {
+        return res.status(400).json({ error: `Invalid table: ${t.name} missing required fields` });
+      }
+      const r = await migrateTableSchema(tenant, t.name, t.primaryKey, t.schema, { destructive: !!req.query.destructive });
+      results.push({ table: t.name, result: r });
+    }
+
+    // Register syncs in metadata
+    for (const s of syncs) {
+      if (!s.name || !s.table || !s.mode) {
+        return res.status(400).json({ error: `Invalid sync: ${s.name} missing required fields` });
+      }
+      await registerSync(tenant, name, s.name, {
+        table: s.table,
+        mode: s.mode,
+        datasource: s.datasource,
+        schedule: s.schedule,
+      });
+    }
+
+    // Store project with source code
+    await upsertDeployedProject(tenant, name, sourceCode);
+
+    res.json({
+      tenant,
+      name,
+      tables: results,
+      syncs: syncs.map((s: any) => s.name),
+    });
+  } catch (e) {
+    console.error(`API: Deploy failed for ${tenant}/${name}:`, e);
+    return res.status(400).json({ error: `Failed to deploy project: ${String(e)}` });
   }
-  await upsertDeployedProject(tenant, name, resolved);
-  res.json({ tenant, name, modulePath: resolved, tables: results, syncs: project.syncs.map((s: any) => s.name) });
 });
 
 // Manually run a sync (used for unscheduled/manual syncs).

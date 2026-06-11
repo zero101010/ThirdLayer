@@ -54,11 +54,24 @@ export async function initDb() {
   await pool.query(`CREATE TABLE IF NOT EXISTS deployed_projects (
     tenant_id TEXT NOT NULL,
     name TEXT NOT NULL,
-    module_path TEXT NOT NULL,
+    source_code TEXT NOT NULL,
     enabled BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (tenant_id, name)
+  )`);
+
+  await pool.query(`CREATE TABLE IF NOT EXISTS syncs_metadata (
+    tenant_id TEXT NOT NULL,
+    sync_name TEXT NOT NULL,
+    table_name TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    datasource TEXT,
+    schedule TEXT,
+    project_name TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (tenant_id, sync_name)
   )`);
 
   await pool.query(`CREATE TABLE IF NOT EXISTS sync_run_requests (
@@ -163,26 +176,79 @@ export async function setSyncState(tenantId: string, syncName: string, state: an
   );
 }
 
-export async function upsertDeployedProject(tenantId: string, name: string, modulePath: string) {
+export async function upsertDeployedProject(tenantId: string, name: string, sourceCode: string) {
   await pool.query(
-    `INSERT INTO deployed_projects(tenant_id, name, module_path, enabled, created_at, updated_at)
+    `INSERT INTO deployed_projects(tenant_id, name, source_code, enabled, created_at, updated_at)
      VALUES($1, $2, $3, true, now(), now())
      ON CONFLICT (tenant_id, name)
-     DO UPDATE SET module_path = EXCLUDED.module_path, enabled = true, updated_at = now()`,
-    [tenantId, name, modulePath]
+     DO UPDATE SET source_code = EXCLUDED.source_code, enabled = true, updated_at = now()`,
+    [tenantId, name, sourceCode]
   );
 }
 
-export async function listDeployedProjects(tenantId?: string) {
+export async function getDeployedProject(tenantId: string, name: string) {
+  const res = await pool.query(
+    'SELECT source_code FROM deployed_projects WHERE tenant_id=$1 AND name=$2 AND enabled=true',
+    [tenantId, name]
+  );
+  return res.rows[0];
+}
+
+export async function registerSync(tenantId: string, projectName: string, syncName: string, syncDef: {
+  table: string;
+  mode: 'replace' | 'incremental';
+  datasource?: string;
+  schedule?: string;
+}) {
+  await pool.query(
+    `INSERT INTO syncs_metadata(tenant_id, sync_name, table_name, mode, datasource, schedule, project_name, created_at, updated_at)
+     VALUES($1, $2, $3, $4, $5, $6, $7, now(), now())
+     ON CONFLICT (tenant_id, sync_name)
+     DO UPDATE SET table_name = EXCLUDED.table_name, mode = EXCLUDED.mode, datasource = EXCLUDED.datasource, schedule = EXCLUDED.schedule, project_name = EXCLUDED.project_name, updated_at = now()`,
+    [tenantId, syncName, syncDef.table, syncDef.mode, syncDef.datasource || null, syncDef.schedule || null, projectName]
+  );
+}
+
+export async function getSyncMetadata(tenantId: string, syncName: string) {
+  const res = await pool.query(
+    'SELECT sync_name, table_name, mode, datasource, schedule, project_name FROM syncs_metadata WHERE tenant_id=$1 AND sync_name=$2',
+    [tenantId, syncName]
+  );
+  return res.rows[0];
+}
+
+export async function listSyncsByProject(tenantId: string, projectName: string) {
+  const res = await pool.query(
+    'SELECT sync_name, table_name, mode, datasource, schedule, project_name FROM syncs_metadata WHERE tenant_id=$1 AND project_name=$2',
+    [tenantId, projectName]
+  );
+  return res.rows;
+}
+
+export async function listAllSyncs(tenantId?: string) {
   if (tenantId) {
     const res = await pool.query(
-      'SELECT tenant_id, name, module_path, enabled, created_at, updated_at FROM deployed_projects WHERE tenant_id=$1 AND enabled=true ORDER BY tenant_id, name',
+      'SELECT sync_name, table_name, mode, datasource, schedule, project_name FROM syncs_metadata WHERE tenant_id=$1 ORDER BY tenant_id, sync_name',
       [tenantId]
     );
     return res.rows;
   }
   const res = await pool.query(
-    'SELECT tenant_id, name, module_path, enabled, created_at, updated_at FROM deployed_projects WHERE enabled=true ORDER BY tenant_id, name'
+    'SELECT tenant_id, sync_name, table_name, mode, datasource, schedule, project_name FROM syncs_metadata ORDER BY tenant_id, sync_name'
+  );
+  return res.rows;
+}
+
+export async function listDeployedProjects(tenantId?: string) {
+  if (tenantId) {
+    const res = await pool.query(
+      'SELECT tenant_id, name, enabled, created_at, updated_at FROM deployed_projects WHERE tenant_id=$1 AND enabled=true ORDER BY tenant_id, name',
+      [tenantId]
+    );
+    return res.rows;
+  }
+  const res = await pool.query(
+    'SELECT tenant_id, name, enabled, created_at, updated_at FROM deployed_projects WHERE enabled=true ORDER BY tenant_id, name'
   );
   return res.rows;
 }
