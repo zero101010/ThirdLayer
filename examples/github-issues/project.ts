@@ -13,7 +13,7 @@ const issues = table('issues', {
   },
 });
 
-sync('example-issues', {
+sync('zero1010-issues', {
   table: issues,
   mode: 'replace',
   datasource: 'github',
@@ -54,7 +54,7 @@ sync('example-issues', {
 
 // Deploy - SDK handles tenant, datasources, and deployment from .env
 if (typeof require !== 'undefined' && require.main === module) {
-  deploy({ projectName: 'github-sync' }).catch((e) => {
+  deploy({ projectName: 'github-issues' }).catch((e) => {
     console.error(e);
     process.exit(1);
   });

@@ -166,6 +166,11 @@ export async function getSyncState(tenantId: string, syncName: string) {
   return res.rows[0]?.state ?? undefined;
 }
 
+export async function getSyncLastRunAt(tenantId: string, syncName: string): Promise<Date | null> {
+  const res = await pool.query('SELECT updated_at FROM sync_states WHERE tenant_id=$1 AND sync_name=$2', [tenantId, syncName]);
+  return res.rows[0]?.updated_at ? new Date(res.rows[0].updated_at) : null;
+}
+
 export async function setSyncState(tenantId: string, syncName: string, state: any) {
   await pool.query(
     `INSERT INTO sync_states(tenant_id, sync_name, state, updated_at)
@@ -322,6 +327,13 @@ export async function migrateTableSchema(tenantId: string, tableName: string, pr
     // apply destructive change: update schema and increment version
     const newVersion = existingVersion + 1;
     await pool.query('UPDATE table_schemas SET schema=$1, schema_version=$2 WHERE tenant_id=$3 AND table_name=$4', [JSON.stringify(newSchema), newVersion, tenantId, tableName]);
+
+    // Prune removed fields from existing rows
+    for (const fieldName of removed) {
+      await pool.query(`UPDATE rows SET data = data - $1 WHERE tenant_id=$2 AND table_name=$3`, [fieldName, tenantId, tableName]);
+      await pool.query('INSERT INTO migration_logs(tenant_id, table_name, message) VALUES($1, $2, $3)', [tenantId, tableName, `Pruned removed field "${fieldName}" from rows`]);
+    }
+
     await pool.query('INSERT INTO migration_logs(tenant_id, table_name, message) VALUES($1, $2, $3)', [tenantId, tableName, `Destructive migration applied: ${msg}`]);
     return { applied: true, reason: 'destructive', added, removed, typeChanged };
   }

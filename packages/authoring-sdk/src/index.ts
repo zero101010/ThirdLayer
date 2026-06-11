@@ -376,6 +376,17 @@ function resolveEnvDatasources(): DatasourceEntry[] {
  *   SYNC_NAME, SKIP_SYNC
  */
 export async function deploy(opts: DeployOptions = {}): Promise<void> {
+  // Load .env from the project file's directory, then from CWD as fallback
+  try {
+    const dotenv = require('dotenv');
+    const pathMod = require('path');
+    const sourceFile = opts.sourceFile ?? (typeof require !== 'undefined' ? require.main?.filename : undefined);
+    if (sourceFile) {
+      dotenv.config({ path: pathMod.resolve(pathMod.dirname(sourceFile), '.env') });
+    }
+    dotenv.config(); // CWD fallback (won't override already-set vars)
+  } catch { /* dotenv not installed, rely on existing env */ }
+
   const baseUrl = (opts.baseUrl ?? process.env.THIRDLAYER_BASE_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
   const adminKey = opts.adminKey ?? process.env.ADMIN_API_KEY;
   if (!adminKey) throw new Error('adminKey is required (pass in options or set ADMIN_API_KEY)');

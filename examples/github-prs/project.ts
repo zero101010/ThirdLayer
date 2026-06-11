@@ -1,9 +1,6 @@
-import dotenv from 'dotenv';
-
 import { table, field, sync, deploy, project, getGitHubRepo, githubGet, hasNextFromLink, bumpCursorTimestamp } from '../../packages/authoring-sdk/src';
 export { project };
 
-dotenv.config();
 // ============================================================================
 // TABLE DEFINITIONS
 // ============================================================================
@@ -13,7 +10,7 @@ const pullRequests = table('pull_requests', {
   schema: {
     id: field.text(),
     title: field.text(),
-    // author: field.text(),
+    author: field.text(),
     state: field.select(['open', 'closed', 'merged']),
     labels: field.multiSelect(),
     isDraft: field.boolean(),
@@ -94,7 +91,7 @@ sync('github-prs', {
 // ============================================================================
 
 if (typeof require !== 'undefined' && require.main === module) {
-  deploy({ projectName: 'github-prs' }).catch((e) => {
+  deploy({ projectName: 'github-prs-zero', destructive: true }).catch((e) => {
     console.error(e);
     process.exit(1);
   });

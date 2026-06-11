@@ -56,7 +56,14 @@ export async function deleteRowsNotInKeys(tenant: string, table: string, keepKey
 export async function getRow(tenant: string, table: string, key: string) {
   const res = await pool.query('SELECT data FROM rows WHERE tenant_id=$1 AND table_name=$2 AND key=$3', [tenant, table, key]);
   if (!res.rows[0]) return null;
-  return { key, values: res.rows[0].data };
+  const raw = res.rows[0].data;
+  const schema = (await getTableSchema(tenant, table)) as SchemaSpec | undefined;
+  if (schema) {
+    const schemaKeys = new Set(Object.keys(schema));
+    const values = Object.fromEntries(Object.entries(raw).filter(([k]) => schemaKeys.has(k)));
+    return { key, values };
+  }
+  return { key, values: raw };
 }
 
 type QueryFilter =
@@ -83,8 +90,18 @@ export async function queryRows(
   opts: { filter?: QueryFilter; sorts?: QuerySort[]; page_size?: number; start_cursor?: string | null } = {}
 ) {
   const size = Math.max(1, Math.min(opts.page_size ?? 25, 200));
+  const schema = (await getTableSchema(tenant, table)) as SchemaSpec | undefined;
+  const schemaKeys = schema ? new Set(Object.keys(schema)) : null;
+
   const res = await pool.query('SELECT key, data FROM rows WHERE tenant_id=$1 AND table_name=$2', [tenant, table]);
-  let rows = res.rows.map((r: any) => ({ key: r.key as string, values: r.data as Record<string, any> }));
+  let rows = res.rows.map((r: any) => {
+    const raw = r.data as Record<string, any>;
+    // Only return fields declared in the current schema
+    const values = schemaKeys
+      ? Object.fromEntries(Object.entries(raw).filter(([k]) => schemaKeys.has(k)))
+      : raw;
+    return { key: r.key as string, values };
+  });
 
   if (opts.filter) rows = rows.filter((r) => matchesFilter(r.values, opts.filter));
 
