@@ -1,21 +1,29 @@
-import { table, field, sync, project, ThirdLayerAdminApi } from '../../packages/authoring-sdk/src';
-import { bumpCursorTimestamp, getGitHubRepo, githubGet, hasNextFromLink } from '../github-api';
 import dotenv from 'dotenv';
 
+import { table, field, sync, deploy, project, getGitHubRepo, githubGet, hasNextFromLink, bumpCursorTimestamp } from '../../packages/authoring-sdk/src';
+export { project };
+
 dotenv.config();
+// ============================================================================
+// TABLE DEFINITIONS
+// ============================================================================
 
 const pullRequests = table('pull_requests', {
   primaryKey: 'id',
   schema: {
     id: field.text(),
     title: field.text(),
+    // author: field.text(),
     state: field.select(['open', 'closed', 'merged']),
-    author: field.text(),
     labels: field.multiSelect(),
     isDraft: field.boolean(),
     updatedAt: field.datetime(),
   },
 });
+
+// ============================================================================
+// SYNC DEFINITIONS
+// ============================================================================
 
 type GitHubPull = {
   id: number;
@@ -30,9 +38,9 @@ type GitHubPull = {
 
 sync('github-prs', {
   table: pullRequests,
-  mode: 'incremental',
+  mode: 'replace',
   datasource: 'github',
-  schedule: '5m',
+  schedule: '1m',
   async execute(state, context) {
     const { owner, repo } = getGitHubRepo('GITHUB_PRS', context);
     const perPage = 50;
@@ -69,7 +77,6 @@ sync('github-prs', {
             id: String(pr.id),
             title: String(pr.title ?? ''),
             state: stateValue,
-            author: String(pr.user?.login ?? ''),
             labels: Array.isArray(pr.labels) ? pr.labels.map((l) => String(l.name ?? '')).filter((l) => l.length > 0) : [],
             isDraft: !!pr.draft,
             updatedAt: String(pr.updated_at ?? new Date().toISOString()),
@@ -82,131 +89,13 @@ sync('github-prs', {
   },
 });
 
-type RawArgs = Record<string, string | boolean>;
-
-function parseArgs(argv: string[]): RawArgs {
-  const parsed: RawArgs = {};
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
-    if (!token.startsWith('--')) continue;
-    const withoutPrefix = token.slice(2);
-    if (!withoutPrefix) continue;
-    const eqIndex = withoutPrefix.indexOf('=');
-    if (eqIndex >= 0) {
-      parsed[withoutPrefix.slice(0, eqIndex)] = withoutPrefix.slice(eqIndex + 1);
-      continue;
-    }
-    const next = argv[i + 1];
-    if (next && !next.startsWith('--')) {
-      parsed[withoutPrefix] = next;
-      i += 1;
-    } else {
-      parsed[withoutPrefix] = true;
-    }
-  }
-  return parsed;
-}
-
-function getArg(args: RawArgs, key: string): string | undefined {
-  const value = args[key];
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function printRunHelp() {
-  console.log(`Run this file directly to do tenant + datasource + deploy + sync in one command:
-
-npx ts-node examples/github-prs/project.ts [options]
-
-Options:
-  --base-url       API base URL (default: http://localhost:3000 or THIRDLAYER_BASE_URL)
-  --admin-key      Admin API key (default: ADMIN_API_KEY from .env)
-  --tenant         Tenant ID (default: TENANT_ID or "acme")
-  --module-path    Module path to deploy (default: examples/github-prs/project.ts)
-  --project-name   Deploy project name (default: github-prs)
-  --sync-name      Sync to enqueue (default: github-prs)
-  --provider       Datasource provider (default: github)
-  --github-token   GitHub token (or GITHUB_TOKEN)
-  --owner          GitHub owner (or GITHUB_PRS_OWNER/GITHUB_OWNER)
-  --repo           GitHub repo (or GITHUB_PRS_REPO/GITHUB_REPO)
-  --tenant-key     Existing tenant key (or TENANT_KEY env) for query example
-  --skip-sync      Skip sync enqueue
-  --help           Show this help`);
-}
-
-async function runDirect() {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.help) {
-    printRunHelp();
-    return;
-  }
-
-  const baseUrl = (getArg(args, 'base-url') ?? process.env.THIRDLAYER_BASE_URL ?? 'http://localhost:3000').replace(
-    /\/+$/,
-    ''
-  );
-  const adminKey = getArg(args, 'admin-key') ?? process.env.ADMIN_API_KEY;
-  if (!adminKey) throw new Error('--admin-key is required (or set ADMIN_API_KEY in .env)');
-  const adminApi = new ThirdLayerAdminApi({ baseUrl, adminApiKey: adminKey });
-  const tenant = getArg(args, 'tenant') ?? process.env.TENANT_ID ?? 'acme';
-  const modulePath = getArg(args, 'module-path') ?? 'examples/github-prs/project.ts';
-  const projectName = getArg(args, 'project-name') ?? 'github-prs';
-  const syncName = getArg(args, 'sync-name') ?? 'github-prs';
-  const provider = getArg(args, 'provider') ?? 'github';
-  const skipSync = !!args['skip-sync'];
-  const existingTenantKey = getArg(args, 'tenant-key') ?? process.env.TENANT_KEY;
-
-  const datasourceConfig = {
-    token: getArg(args, 'github-token') ?? process.env.GITHUB_TOKEN,
-    owner: getArg(args, 'owner') ?? process.env.GITHUB_PRS_OWNER ?? process.env.GITHUB_OWNER,
-    repo: getArg(args, 'repo') ?? process.env.GITHUB_PRS_REPO ?? process.env.GITHUB_REPO,
-  };
-  const config = Object.fromEntries(
-    Object.entries(datasourceConfig).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
-  );
-
-  console.log(`1/4 Creating tenant "${tenant}"...`);
-  const tenantResult = await adminApi.createTenant(tenant);
-  const effectiveTenantKey = tenantResult.apiKey ?? existingTenantKey ?? null;
-  if (tenantResult.created) {
-    console.log(`Tenant created: ${tenantResult.tenantId}`);
-  } else {
-    console.log(`Tenant already exists: ${tenantResult.tenantId} (kept existing key)`);
-  }
-
-  if (Object.keys(config).length > 0) {
-    console.log(`2/4 Saving datasource config "${provider}"...`);
-    await adminApi.setDatasourceConfig(tenant, provider, config);
-  } else {
-    console.log('2/4 Skipping datasource config (no token/owner/repo provided).');
-  }
-
-  console.log(`3/4 Deploying "${projectName}" from "${modulePath}"...`);
-  await adminApi.deployProject(tenant, projectName, modulePath);
-
-  if (skipSync) {
-    console.log('4/4 Skipping sync enqueue (--skip-sync).');
-  } else {
-    console.log(`4/4 Enqueuing sync "${syncName}"...`);
-    await adminApi.enqueueSync(tenant, syncName);
-  }
-
-  console.log('\nDone.');
-  console.log(`Tenant ID: ${tenantResult.tenantId}`);
-  if (effectiveTenantKey) {
-    console.log(`Tenant Key: ${effectiveTenantKey}`);
-    console.log(
-      `curl -s -X POST ${baseUrl}/v1/tables/pull_requests/query -H "x-tenant-id: ${tenantResult.tenantId}" -H "x-tenant-key: ${effectiveTenantKey}" -H "Content-Type: application/json" -d '{"page_size":10}'`
-    );
-  } else {
-    console.log('Tenant key not returned because tenant already existed. Pass --tenant-key (or TENANT_KEY) for query calls.');
-  }
-}
+// ============================================================================
+// DEPLOY - just call deploy(), SDK handles everything from .env
+// ============================================================================
 
 if (typeof require !== 'undefined' && require.main === module) {
-  runDirect().catch((error) => {
-    console.error(error);
+  deploy({ projectName: 'github-prs' }).catch((e) => {
+    console.error(e);
     process.exit(1);
   });
 }
-
-export { project };

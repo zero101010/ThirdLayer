@@ -5,7 +5,6 @@
   "scripts": {
     "start:server": "ts-node server/src/index.ts",
     "start:worker": "ts-node server/services/worker/src/index.ts",
-    "run:project": "ts-node scripts/run-project.ts",
     "build": "tsc -b"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
-import { table, field, sync, project } from '../../packages/authoring-sdk/src';
-import { getGitHubRepo, githubGet, hasNextFromLink } from '../github-api';
+import { table, field, sync, deploy, project, getGitHubRepo, githubGet, hasNextFromLink } from '../../packages/authoring-sdk/src';
+export { project };
 
 const issues = table('issues', {
   primaryKey: 'id',
@@ -17,7 +17,7 @@ sync('example-issues', {
   table: issues,
   mode: 'replace',
   datasource: 'github',
-  schedule: '15m',
+  schedule: '1m',
   async execute(state, context) {
     const { owner, repo } = getGitHubRepo('GITHUB_ISSUES', context);
     const page = typeof state?.page === 'number' && state.page > 0 ? state.page : 1;
@@ -52,4 +52,10 @@ sync('example-issues', {
   },
 });
 
-export { project };
+// Deploy - SDK handles tenant, datasources, and deployment from .env
+if (typeof require !== 'undefined' && require.main === module) {
+  deploy({ projectName: 'github-sync' }).catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
