@@ -9,6 +9,7 @@ import {
   listPendingSyncRunRequests,
   markSyncRunRequestStatus,
   getSyncMetadata,
+  getSyncLastRunAt,
 } from '../../../src/pg';
 import { upsertRow, deleteRow, deleteRowsNotInKeys } from '../../../src/db';
 
@@ -264,6 +265,55 @@ async function processSyncRunRequests(): Promise<void> {
 }
 
 /**
+ * Parse schedule string (e.g. "1m", "30s", "5m") to milliseconds
+ */
+function parseScheduleToMs(schedule: string): number {
+  const match = schedule.match(/^(\d+)(s|m|h)$/);
+  if (!match) return 0;
+  const value = parseInt(match[1], 10);
+  switch (match[2]) {
+    case 's': return value * 1000;
+    case 'm': return value * 60 * 1000;
+    case 'h': return value * 60 * 60 * 1000;
+    default: return 0;
+  }
+}
+
+/**
+ * Run scheduled syncs that are due
+ */
+async function processScheduledSyncs(): Promise<void> {
+  const allSyncs = await listAllSyncs();
+  const now = Date.now();
+
+  for (const syncMeta of allSyncs) {
+    if (!syncMeta.schedule) continue;
+
+    const intervalMs = parseScheduleToMs(syncMeta.schedule);
+    if (intervalMs <= 0) continue;
+
+    const lastRun = await getSyncLastRunAt(syncMeta.tenant_id, syncMeta.sync_name);
+    const elapsed = lastRun ? now - lastRun.getTime() : Infinity;
+
+    if (elapsed < intervalMs) continue;
+
+    try {
+      const syncDef = await getSyncDef(syncMeta.tenant_id, syncMeta.sync_name, syncMeta.project_name);
+      if (!syncDef) {
+        console.warn(`Worker: Sync definition not found for scheduled sync ${syncMeta.tenant_id}/${syncMeta.sync_name}`);
+        continue;
+      }
+
+      console.log(`Worker: Running scheduled sync ${syncMeta.tenant_id}/${syncMeta.sync_name}`);
+      await executeSyncLoop(syncMeta.tenant_id, syncMeta.sync_name, syncMeta, syncDef);
+      console.log(`Worker: Completed scheduled sync ${syncMeta.tenant_id}/${syncMeta.sync_name}`);
+    } catch (e) {
+      console.error(`Worker: Scheduled sync ${syncMeta.tenant_id}/${syncMeta.sync_name} failed:`, e instanceof Error ? e.message : e);
+    }
+  }
+}
+
+/**
  * Main worker loop
  */
 async function start(): Promise<void> {
@@ -289,6 +339,9 @@ async function start(): Promise<void> {
 
       // Process enqueued sync requests
       await processSyncRunRequests();
+
+      // Run scheduled syncs that are due
+      await processScheduledSyncs();
     } catch (e) {
       console.error('Worker: Processing failed:', e);
     }
