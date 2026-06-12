@@ -490,32 +490,45 @@ export async function deploy(opts: DeployOptions = {}): Promise<void> {
   }
 
   console.log(`\nDone! Tenant: ${tenantId}`);
+
+  // Resolve the tenant key: new creation > existing env var
+  const tenantKey = tenantResult.apiKey || process.env.TENANT_KEY || null;
+
   if (tenantResult.apiKey) {
     console.log(`API Key: ${tenantResult.apiKey}`);
+  }
 
-    // Auto-save TENANT_KEY to the project's .env so query scripts work immediately
+  // Auto-save TENANT_KEY to the project's .env so query scripts work immediately
+  if (tenantKey) {
     try {
       const fsMod = require('fs');
       const pathMod = require('path');
       const envPath = pathMod.resolve(pathMod.dirname(sourceFile), '.env');
       if (fsMod.existsSync(envPath)) {
         let envContent = fsMod.readFileSync(envPath, 'utf8');
-        if (envContent.match(/^TENANT_KEY=/m)) {
-          envContent = envContent.replace(/^TENANT_KEY=.*$/m, `TENANT_KEY=${tenantResult.apiKey}`);
+        const alreadySet = envContent.match(/^TENANT_KEY=(.+)$/m);
+        if (alreadySet && alreadySet[1] === tenantKey) {
+          // Already correct, skip
+        } else if (alreadySet) {
+          envContent = envContent.replace(/^TENANT_KEY=.*$/m, `TENANT_KEY=${tenantKey}`);
+          fsMod.writeFileSync(envPath, envContent);
+          console.log(`  Updated TENANT_KEY in ${envPath}`);
         } else {
-          envContent = envContent.trimEnd() + `\nTENANT_KEY=${tenantResult.apiKey}\n`;
+          envContent = envContent.trimEnd() + `\nTENANT_KEY=${tenantKey}\n`;
+          fsMod.writeFileSync(envPath, envContent);
+          console.log(`  Saved TENANT_KEY to ${envPath}`);
         }
-        fsMod.writeFileSync(envPath, envContent);
-        console.log(`  Saved TENANT_KEY to ${envPath}`);
       }
     } catch { /* non-critical */ }
 
     if (deployResult.tables[0]) {
       const t = deployResult.tables[0].table;
       console.log(
-        `\nQuery example:\ncurl -X POST ${baseUrl}/v1/tables/${t}/query \\\n  -H "x-tenant-id: ${tenantId}" \\\n  -H "x-tenant-key: ${tenantResult.apiKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"page_size":10}'`
+        `\nQuery example:\ncurl -X POST ${baseUrl}/v1/tables/${t}/query \\\n  -H "x-tenant-id: ${tenantId}" \\\n  -H "x-tenant-key: ${tenantKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"page_size":10}'`
       );
     }
+  } else {
+    console.log(`  Warning: No TENANT_KEY available. Add TENANT_KEY to your .env for query scripts.`);
   }
 }
 

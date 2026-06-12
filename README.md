@@ -53,7 +53,21 @@ DEVELOPER'S MACHINE                        HOSTED PLATFORM (Docker)
 
 ## Quickstart with Docker Compose
 
-### 1. Start all services
+### 1. Create the root `.env` file
+
+```bash
+cp .env.example .env
+```
+
+The root `.env` is used by the API and Worker containers. Default values:
+
+```env
+DATABASE_URL=postgresql://postgres:postgres@postgres:5432/thirdlayer
+ADMIN_API_KEY=admin-secret
+DATASOURCE_CONFIG_KEY=dev-datasource-config-key
+```
+
+### 2. Start all services
 
 ```bash
 docker compose up -d
@@ -64,13 +78,13 @@ This starts three containers:
 - `thirdlayer-api` on port 3000
 - `thirdlayer-worker` processing syncs in the background
 
-### 2. Install local dependencies (for running examples)
+### 3. Install local dependencies (for running examples)
 
 ```bash
 npm install
 ```
 
-### 3. Configure an example
+### 4. Configure an example
 
 Each example has a `.env.example` template. Copy and fill it in:
 
@@ -88,10 +102,9 @@ PROJECT_NAME=github-issues
 GITHUB_TOKEN=ghp_your_token_here
 GITHUB_OWNER=octocat
 GITHUB_REPO=Hello-World
-TENANT_KEY=              # filled after first deploy (printed in output)
 ```
 
-### 4. Deploy a project
+### 5. Deploy a project
 
 ```bash
 npx ts-node examples/github-issues/project.ts
@@ -103,9 +116,9 @@ Output shows the 4-step flow:
 3. Deploys project (migrates schema, stores source code)
 4. Enqueues initial sync
 
-Save the `apiKey` printed on first tenant creation -- you'll need it as `TENANT_KEY` for queries.
+On first deploy, the `TENANT_KEY` is automatically saved to the project's `.env` file. For subsequent examples sharing the same `TENANT_ID`, the key is read from the environment and saved to each project's `.env` automatically.
 
-### 5. Query data
+### 6. Query data
 
 Add `TENANT_KEY=<your-key>` to the example's `.env`, then:
 
