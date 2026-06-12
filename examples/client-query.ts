@@ -1,3 +1,6 @@
+import * as dotenv from 'dotenv';
+dotenv.config();
+
 import { Client, QueryRequest } from '../packages/client-sdk/src';
 
 async function main() {

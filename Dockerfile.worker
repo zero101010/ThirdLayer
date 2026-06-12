@@ -1,11 +1,17 @@
-FROM node:20
+FROM node:20-alpine
 WORKDIR /app
 
-COPY . .
+COPY package*.json ./
+RUN npm ci
 
-RUN npm install
+COPY --chown=root:node tsconfig.json ./
+COPY --chown=root:node server/ ./server/
+COPY --chown=root:node packages/ ./packages/
 
+RUN mkdir -p /tmp/thirdlayer && chown node:node /tmp/thirdlayer
 
 ENV NODE_ENV=production
 
-CMD ["npm", "run", "start:worker"]
+USER node
+
+CMD ["npx", "ts-node", "server/services/worker/src/index.ts"]

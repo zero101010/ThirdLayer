@@ -149,6 +149,49 @@ export function bumpCursorTimestamp(ts: string): string {
 }
 
 // ============================================================================
+// LINEAR CONNECTOR - helpers for Linear API syncs (GraphQL)
+// ============================================================================
+
+export class LinearApiError extends Error {
+  errors: any[];
+  constructor(message: string, errors: any[]) {
+    super(message);
+    this.name = 'LinearApiError';
+    this.errors = errors;
+  }
+}
+
+export async function linearQuery<T = any>(
+  query: string,
+  variables: Record<string, any> = {},
+  context?: SyncExecutionContext
+): Promise<T> {
+  const fetchFn = resolveFetchForConnectors();
+  const token = context?.datasource?.token || process.env.LINEAR_API_KEY;
+  if (!token) throw new Error('Linear API key required. Set LINEAR_API_KEY or configure the linear datasource.');
+
+  const res = await fetchFn('https://api.linear.app/graphql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: token,
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+
+  const json = await res.json();
+
+  if (!res.ok || json.errors) {
+    throw new LinearApiError(
+      `Linear API error: ${json.errors?.[0]?.message ?? res.status}`,
+      json.errors ?? []
+    );
+  }
+
+  return json.data as T;
+}
+
+// ============================================================================
 // INTERNAL HELPERS
 // ============================================================================
 
@@ -449,6 +492,24 @@ export async function deploy(opts: DeployOptions = {}): Promise<void> {
   console.log(`\nDone! Tenant: ${tenantId}`);
   if (tenantResult.apiKey) {
     console.log(`API Key: ${tenantResult.apiKey}`);
+
+    // Auto-save TENANT_KEY to the project's .env so query scripts work immediately
+    try {
+      const fsMod = require('fs');
+      const pathMod = require('path');
+      const envPath = pathMod.resolve(pathMod.dirname(sourceFile), '.env');
+      if (fsMod.existsSync(envPath)) {
+        let envContent = fsMod.readFileSync(envPath, 'utf8');
+        if (envContent.match(/^TENANT_KEY=/m)) {
+          envContent = envContent.replace(/^TENANT_KEY=.*$/m, `TENANT_KEY=${tenantResult.apiKey}`);
+        } else {
+          envContent = envContent.trimEnd() + `\nTENANT_KEY=${tenantResult.apiKey}\n`;
+        }
+        fsMod.writeFileSync(envPath, envContent);
+        console.log(`  Saved TENANT_KEY to ${envPath}`);
+      }
+    } catch { /* non-critical */ }
+
     if (deployResult.tables[0]) {
       const t = deployResult.tables[0].table;
       console.log(

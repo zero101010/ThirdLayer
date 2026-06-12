@@ -54,7 +54,7 @@ sync('zero1010-issues', {
 
 // Deploy - SDK handles tenant, datasources, and deployment from .env
 if (typeof require !== 'undefined' && require.main === module) {
-  deploy({ projectName: 'github-issues' }).catch((e) => {
+  deploy({ projectName: 'github-issues', destructive: true }).catch((e) => {
     console.error(e);
     process.exit(1);
   });

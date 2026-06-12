@@ -9,6 +9,23 @@ const connectionString = process.env.DATABASE_URL || 'postgresql://localhost:543
 export const pool = new Pool({ connectionString });
 
 export async function initDb() {
+  // Drop orphan types that conflict with table names.
+  // Postgres auto-creates a type for every table; if a table is dropped
+  // but the type lingers, CREATE TABLE IF NOT EXISTS fails.
+  const tableNames = ['tenants', 'rows', 'table_schemas', 'migration_logs',
+    'sync_states', 'deployed_projects', 'syncs_metadata', 'sync_run_requests', 'datasource_configs'];
+  for (const name of tableNames) {
+    await pool.query(`
+      DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON t.typnamespace = n.oid
+                   WHERE t.typname = '${name}' AND n.nspname = 'public')
+           AND NOT EXISTS (SELECT 1 FROM pg_tables WHERE tablename = '${name}' AND schemaname = 'public') THEN
+          DROP TYPE IF EXISTS "${name}" CASCADE;
+        END IF;
+      END $$;
+    `);
+  }
+
   // create necessary tables
   await pool.query(`CREATE TABLE IF NOT EXISTS rows (
     tenant_id TEXT NOT NULL DEFAULT 'default',

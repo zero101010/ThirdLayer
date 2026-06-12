@@ -1,14 +1,18 @@
-FROM node:20-bookworm-slim
+FROM node:20-alpine
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci
 
-COPY . .
+COPY --chown=root:node tsconfig.json ./
+COPY --chown=root:node server/ ./server/
+COPY --chown=root:node packages/ ./packages/
 
 ENV NODE_ENV=production
 ENV PORT=3000
 
 EXPOSE 3000
 
-CMD ["npx", "tsx", "server/src/index.ts"]
+USER node
+
+CMD ["npx", "ts-node", "server/src/index.ts"]

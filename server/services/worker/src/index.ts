@@ -10,6 +10,9 @@ import {
   markSyncRunRequestStatus,
   getSyncMetadata,
   getSyncLastRunAt,
+  migrateTableSchema,
+  registerSync,
+  upsertDeployedProject,
 } from '../../../src/pg';
 import { upsertRow, deleteRow, deleteRowsNotInKeys } from '../../../src/db';
 
@@ -19,6 +22,7 @@ const fs = require('fs');
 // Cache of loaded projects to avoid reloading
 const projectCache = new Map<string, any>();
 const syncCache = new Map<string, any>();
+const sourceHashCache = new Map<string, string>();
 
 // Resolve the absolute path to the SDK so we can rewrite imports in temp files
 const SDK_ABS_PATH = path.resolve(__dirname, '../../../../packages/authoring-sdk/src');
@@ -52,7 +56,8 @@ function rewriteImports(sourceCode: string): string {
 function executeProjectSource(tenantId: string, projectName: string, sourceCode: string): any {
   const cacheKey = `${tenantId}::${projectName}`;
 
-  if (projectCache.has(cacheKey)) {
+  // Return cached version only if source code hasn't changed
+  if (projectCache.has(cacheKey) && sourceHashCache.get(cacheKey) === sourceCode) {
     return projectCache.get(cacheKey);
   }
 
@@ -74,8 +79,12 @@ function executeProjectSource(tenantId: string, projectName: string, sourceCode:
     const loaded = require(tmpFile);
     const project = loaded?.project;
 
+    // Clear Node's require cache for this temp file so future reloads get fresh code
+    delete require.cache[require.resolve(tmpFile)];
+
     if (project) {
       projectCache.set(cacheKey, project);
+      sourceHashCache.set(cacheKey, sourceCode);
     }
 
     // Clean up async
@@ -91,6 +100,46 @@ function executeProjectSource(tenantId: string, projectName: string, sourceCode:
   } catch (e) {
     console.error(`Worker: Failed to execute project source for ${tenantId}/${projectName}:`, e);
     throw e;
+  }
+}
+
+/**
+ * Auto-migrate table schemas and sync metadata from a loaded project.
+ * This ensures the DB schema always matches the source code,
+ * so syncs never fail due to stale schema.
+ */
+async function autoMigrateProject(tenantId: string, projectName: string, project: any, sourceCode: string): Promise<void> {
+  // Migrate table schemas (destructive: auto-apply additions and removals)
+  for (const table of project.tables || []) {
+    try {
+      const result = await migrateTableSchema(tenantId, table.name, table.primaryKey, table.schema, { destructive: true });
+      if (result.applied) {
+        console.log(`Worker: Auto-migrated schema ${tenantId}/${table.name}: ${result.reason}`);
+      }
+    } catch (e) {
+      console.error(`Worker: Failed to auto-migrate schema ${tenantId}/${table.name}:`, e);
+    }
+  }
+
+  // Re-register syncs so metadata stays current
+  for (const sync of project.syncs || []) {
+    try {
+      await registerSync(tenantId, projectName, sync.name, {
+        table: sync.table.name,
+        mode: sync.mode,
+        datasource: sync.datasource,
+        schedule: sync.schedule,
+      });
+    } catch (e) {
+      console.error(`Worker: Failed to register sync ${tenantId}/${sync.name}:`, e);
+    }
+  }
+
+  // Update stored source code so it matches what we just migrated
+  try {
+    await upsertDeployedProject(tenantId, projectName, sourceCode);
+  } catch (e) {
+    console.error(`Worker: Failed to update stored source for ${tenantId}/${projectName}:`, e);
   }
 }
 
@@ -135,6 +184,15 @@ async function executeSyncLoop(
   const table = syncMetadata.table_name;
   const mode = syncMetadata.mode;
   const datasource = syncMetadata.datasource;
+
+  // Auto-migrate schema before writing data — ensures DB matches the code
+  const tableDef = syncDef.table;
+  if (tableDef?.schema) {
+    const migration = await migrateTableSchema(tenantId, tableDef.name, tableDef.primaryKey, tableDef.schema, { destructive: true });
+    if (migration.applied) {
+      console.log(`Worker: Auto-migrated schema ${tenantId}/${tableDef.name} before sync: ${migration.reason}`);
+    }
+  }
 
   let state = await getSyncState(tenantId, syncName);
   let loop = 0;
@@ -215,12 +273,20 @@ async function loadDeployedProjects(): Promise<void> {
         continue;
       }
 
+      const cacheKey = `${projectInfo.tenantId}::${projectInfo.name}`;
+      const sourceChanged = sourceHashCache.get(cacheKey) !== deployedProject.source_code;
+
       const project = executeProjectSource(projectInfo.tenantId, projectInfo.name, deployedProject.source_code);
       if (!project) continue;
 
+      // Auto-migrate schemas when source code has changed
+      if (sourceChanged) {
+        await autoMigrateProject(projectInfo.tenantId, projectInfo.name, project, deployedProject.source_code);
+      }
+
       for (const sync of project.syncs || []) {
-        const cacheKey = `${projectInfo.tenantId}::${sync.name}`;
-        syncCache.set(cacheKey, sync);
+        const syncCacheKey = `${projectInfo.tenantId}::${sync.name}`;
+        syncCache.set(syncCacheKey, sync);
       }
 
       console.log(`Worker: Loaded project ${projectKey}`);
@@ -256,10 +322,11 @@ async function processSyncRunRequests(): Promise<void> {
       await executeSyncLoop(tenantId, syncName, syncMeta, syncDef);
       await markSyncRunRequestStatus(id, 'done');
       console.log(`Worker: Completed enqueued sync ${tenantId}/${syncName}`);
-    } catch (e) {
+    } catch (e: any) {
       const errorMsg = e instanceof Error ? e.message : String(e);
-      console.error(`Worker: Failed enqueued sync ${tenantId}/${syncName}:`, errorMsg);
-      await markSyncRunRequestStatus(id, 'failed', errorMsg);
+      const details = e?.details ? ` [${e.details.join(', ')}]` : '';
+      console.error(`Worker: Failed enqueued sync ${tenantId}/${syncName}:`, errorMsg + details);
+      await markSyncRunRequestStatus(id, 'failed', errorMsg + details);
     }
   }
 }
@@ -307,8 +374,9 @@ async function processScheduledSyncs(): Promise<void> {
       console.log(`Worker: Running scheduled sync ${syncMeta.tenant_id}/${syncMeta.sync_name}`);
       await executeSyncLoop(syncMeta.tenant_id, syncMeta.sync_name, syncMeta, syncDef);
       console.log(`Worker: Completed scheduled sync ${syncMeta.tenant_id}/${syncMeta.sync_name}`);
-    } catch (e) {
-      console.error(`Worker: Scheduled sync ${syncMeta.tenant_id}/${syncMeta.sync_name} failed:`, e instanceof Error ? e.message : e);
+    } catch (e: any) {
+      const details = e?.details ? ` [${e.details.join(', ')}]` : '';
+      console.error(`Worker: Scheduled sync ${syncMeta.tenant_id}/${syncMeta.sync_name} failed:`, (e instanceof Error ? e.message : e) + details);
     }
   }
 }
@@ -334,6 +402,7 @@ async function start(): Promise<void> {
       if (reloadCounter % 6 === 0) {
         projectCache.clear();
         syncCache.clear();
+        sourceHashCache.clear();
         await loadDeployedProjects();
       }
 
