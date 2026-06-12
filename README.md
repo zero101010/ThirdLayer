@@ -2,6 +2,15 @@
 
 Multi-tenant platform that lets developers define flexible tables, sync data from external sources (GitHub, Linear), and query data through a REST API and typed Client SDK.
 
+This is a Vídeo that shows and explain the full structure and how to run
+
+https://www.loom.com/share/abfc5c6d6bfc4be2a561e9db87918c11
+
+This is other video that shows how to query with the SDK
+
+https://www.loom.com/share/ba7d1f6921d94204a02b5b46c482c7b8
+
+
 ## Architecture
 
 ```
